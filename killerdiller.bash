@@ -77,18 +77,18 @@ echo "Running ${FUNCNAME[0]}"
 
 
 function daemon_set() {
-	echo "Running ${FUNCNAME[0]}"
-	# Choose which script to download/use/collect data.
-	# pcap, cifs, podcpu
-	export NAME=pcap
-	#Create a file called debug-something.yaml with the following contents:
-        
-cat << EOF > $RESOURCEGROUP/debug-template.yaml
+    echo "Running ${FUNCNAME[0]}"
+
+    # Choose which script to download/use/collect data.
+    # pcap, cifs, podcpu
+    export NAME=pcap
+
+    # Create a file called debug-something.yaml with the following contents:
+    cat <<EOF > $RESOURCEGROUP/debug-template.yaml
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: ${NAME}
-  #name: pcap
   namespace: default
 spec:
   selector:
@@ -103,67 +103,64 @@ spec:
       securityContext:
         fsGroupChangePolicy: OnRootMismatch
       containers:
-      - env:
+      - name: ${NAME}
+        env:
         - name: HOSTNAME
           valueFrom:
-              fieldRef:
-                  fieldPath: spec.nodeName
-            name:  ${NAME}
+            fieldRef:
+              fieldPath: spec.nodeName
 EOF
-envsubst < $RESOURCEGROUP/debug-template.yaml >> "${RESOURCEGROUP}/debug-${NAME}.yaml"
-cat << 'EOF' >> "${RESOURCEGROUP}/debug-${NAME}.yaml"
-            command:
-            - nsenter
-            - --target
-            - "1"
-            - --net
-            - --
-            - bash
-            - -xc
-            - |
-              PIDFILE="/var/run/pcap.pid"
-              STARTTIME=$(date -u +%Y%m%dT%H%M%S)
-              if ! command -v tcpdump &> /dev/null
-                then
-                if command -v apt-get &> /dev/null; then
-                  DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y tcpdump
-                elif command -v tdnf &> /dev/null; then
-                tdnf install -y tcpdump util-linux
-              else
-                echo "No known package manager found is this a Windows node?"
-                exit 44
-               fi
-              fi
-              mkdir -p /debug/$HOSTNAME
-              tcpdump -i any -s 100 -C 250 -w "/debug/$HOSTNAME/$STARTTIME.pcap" &
-              echo $! > $PIDFILE
-              wait
-              rm $PIDFILE
-              echo "sleeping forever"
-              sleep infinity
-            #image: alpine:latest
-            image: mcr.microsoft.com/dotnet/runtime-deps:6.0
-            resources:
-              requests:
-                cpu: 50m
-                memory: 50M
-            securityContext:
-              privileged: true
-              capabilities:
-                add:
-                #- SYS_ADMIN
-                #- SYS_PTRACE
-                - NET_ADMIN
-            volumeMounts:
-            - name: azure 
-              mountPath: /debug
+
+    envsubst < $RESOURCEGROUP/debug-template.yaml > "${RESOURCEGROUP}/debug-${NAME}.yaml"
+
+    cat << 'EOF' >> "${RESOURCEGROUP}/debug-${NAME}.yaml"
+        command:
+        - nsenter
+        - --target
+        - "1"
+        - --net
+        - --
+        - bash
+        - -xc
+        - |
+          PIDFILE="/var/run/pcap.pid"
+          STARTTIME=$(date -u +%Y%m%dT%H%M%S)
+          if ! command -v tcpdump &> /dev/null
+          then
+            if command -v apt-get &> /dev/null; then
+              DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y tcpdump
+            elif command -v tdnf &> /dev/null; then
+              tdnf install -y tcpdump util-linux
+            else
+              echo "No known package manager found is this a Windows node?"
+              exit 44
+            fi
+          fi
+          mkdir -p /debug/$HOSTNAME
+          tcpdump -i any -s 100 -C 250 -w "/debug/$HOSTNAME/$STARTTIME.pcap" &
+          echo $! > $PIDFILE
+          wait
+          rm $PIDFILE
+          echo "sleeping forever"
+          sleep infinity
+        image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+        resources:
+          requests:
+            cpu: 50m
+            memory: 50M
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - NET_ADMIN
+        volumeMounts:
+        - name: azure 
+          mountPath: /debug
       volumes:
       - name: azure
         persistentVolumeClaim:
           claimName: debug-share 
 EOF
-
-#envsubst < $RESOURCEGROUP/debug-template.yaml >> "${RESOURCEGROUP}/debug-${NAME}.yaml"
 }
 
 function create_pv_pvc(){
