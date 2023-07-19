@@ -240,7 +240,7 @@ function apply_config(){
 kubectl apply -f $RESOURCEGROUP/debugpv.yaml
 
 kubectl apply -f $RESOURCEGROUP/debugpvc.yaml
-wait 10
+sleep 15
 echo "Waiting a bit for the PV/PVC to land" 
 
 kubectl apply -f "${RESOURCEGROUP}/debug-${NAME}.yaml"
