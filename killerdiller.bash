@@ -18,7 +18,6 @@ LOCATION="eastus"
 SECRETNAME="$STORAGEACCOUNT-secret"
 SHARENAME="debug"
 
-
 mkdir -p $RESOURCEGROUP
 
 function create_resource_group() {
@@ -27,6 +26,7 @@ function create_resource_group() {
 
 	#Check to make sure that the resource group does not exist
 	if ! az group show --resource-group $RESOURCEGROUP /dev/null 2>&1; then
+		
 		az group create  --location $LOCATION --resource-group $RESOURCEGROUP
 	fi
 }
@@ -50,13 +50,19 @@ function create_storage_account() {
 	kubectl create secret generic $SECRETNAME --from-literal=azurestorageaccountname=$STORAGEACCOUNT --from-literal=azurestorageaccountkey=$STORAGE_KEY
 }
 
+function get_storage_account_keys() {
+	# already got keys in create_storage_account - This function isn't needed...
+	echo "Running ${FUNCNAME[0]}"
+	# Get the storage account keys
+	#account_keys=$(az storage account keys list --resource-group $1 --account-name $STORAGEACCOUNT | jq -r .keys[0].value)
+	account_keys=$(az storage account keys list --resource-group $RESOURCEGROUP --account-name $STORAGEACCOUNT | grep value | head -n 1 | cut -d ":" -f 2 | tr -d '"')
+}
 
 function test_storage_account_viability() {
 	echo "Running ${FUNCNAME[0]}"
 	#Test the viability of the storage account
 if [[ -n $STORAGE_KEY ]]; then
 	echo "Storage account created successfully"
-  kubectl get secret | grep $SECRETNAME
 	else
 	echo "Error creating storage account"
 fi
@@ -74,29 +80,24 @@ function daemon_set() {
 	echo "Running ${FUNCNAME[0]}"
 	# Choose which script to download/use/collect data.
 	# pcap, cifs, podcpu
-	#2023.07.17 The daemonset below is hardcoded for pcap... need to figure out the other coolness.
-	#export NAME=pcap
-	#Create a file called debug-daemonset.yaml with the following contents:
-	#envsubst < kubectl apply -f - <<EOF
-
-
-cat <<EOF > $RESOURCEGROUP/debug-pcap.yaml
+	export NAME=pcap
+	#Create a file called debug-something.yaml with the following contents:
+        
+cat << EOF > $RESOURCEGROUP/debug-template.yaml
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  #name: \${NAME}
-  name: pcap
+  name: ${NAME}
+  #name: pcap
   namespace: default
 spec:
   selector:
     matchLabels:
-      #app: \${NAME}
-      app: pcap
+      app: ${NAME}
   template:
     metadata:
       labels:
-        app: pcap
-        #app: \${NAME}
+        app: ${NAME}
     spec:
       hostPID: true
       securityContext:
@@ -105,58 +106,57 @@ spec:
       - env:
         - name: HOSTNAME
           valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
-        #name:  \${NAME} 
-        name: pcap
-        command:
-        - nsenter
-        - --target
-        - "1"
-        - --net
-        - --
-        - bash
-        - -xc
-        - |
-          PIDFILE="/var/run/pcap.pid"
-          STARTTIME=\\\$(date -u +%Y%m%dT%H%M%S)
-          if ! command -v tcpdump &> /dev/null
-            then
-            if command -v apt-get &> /dev/null; then
-              DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y tcpdump
-            elif command -v tdnf &> /dev/null; then
-              tdnf install -y tcpdump util-linux
-            else
-              echo "No known package manager found is this a Windows node?"
-              exit 44
-            fi
-          fi
-          mkdir -p /debug/\\\$HOSTNAME
-          echo "HOSTNAME:\\\$HOSTNAME"
-          #sudo bash -c "nohup tcpdump -i any -s 100 -C 1000 -w /debug/\\\$HOSTNAME/\\\$STARTTIME.pcap"
-          tcpdump -i any -s 100 -C 1000 -w "/debug/\\\$HOSTNAME/\\\$STARTTIME.pcap" &
-          echo \\\$! > \\\$PIDFILE
-          wait
-          rm \\\$PIDFILE
-          echo "sleeping forever"
-          sleep infinity                  
-        #image: ubuntu:latest
-        #image: alpine:latest
-        image: mcr.microsoft.com/dotnet/runtime-deps:6.0
-        resources:
-          requests:
-            cpu: 50m
-            memory: 50M
-        securityContext:
-          privileged: true
-          capabilities:
-            add:
-            #- SYS_ADMIN
-            #- SYS_PTRACE
-            - NET_ADMIN
-        volumeMounts:
-        - name: azure 
-          mountPath: /debug
+              fieldRef:
+                  fieldPath: spec.nodeName
+            name:  ${NAME}
+EOF
+envsubst < $RESOURCEGROUP/debug-template.yaml >> "${RESOURCEGROUP}/debug-${NAME}.yaml"
+cat << 'EOF' >> "${RESOURCEGROUP}/debug-${NAME}.yaml"
+            command:
+            - nsenter
+            - --target
+            - "1"
+            - --net
+            - --
+            - bash
+            - -xc
+            - |
+              PIDFILE="/var/run/pcap.pid"
+              STARTTIME=$(date -u +%Y%m%dT%H%M%S)
+              if ! command -v tcpdump &> /dev/null
+                then
+                if command -v apt-get &> /dev/null; then
+                  DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y tcpdump
+                elif command -v tdnf &> /dev/null; then
+                tdnf install -y tcpdump util-linux
+              else
+                echo "No known package manager found is this a Windows node?"
+                exit 44
+               fi
+              fi
+              mkdir -p /debug/$HOSTNAME
+              tcpdump -i any -s 100 -C 250 -w "/debug/$HOSTNAME/$STARTTIME.pcap" &
+              echo $! > $PIDFILE
+              wait
+              rm $PIDFILE
+              echo "sleeping forever"
+              sleep infinity
+            #image: alpine:latest
+            image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+            resources:
+              requests:
+                cpu: 50m
+                memory: 50M
+            securityContext:
+              privileged: true
+              capabilities:
+                add:
+                #- SYS_ADMIN
+                #- SYS_PTRACE
+                - NET_ADMIN
+            volumeMounts:
+            - name: azure 
+              mountPath: /debug
       volumes:
       - name: azure
         persistentVolumeClaim:
@@ -241,11 +241,12 @@ kubectl logs -l app=debug-${NAME}
 
 function apply_config(){
 kubectl apply -f $RESOURCEGROUP/debugpv.yaml
+
 kubectl apply -f $RESOURCEGROUP/debugpvc.yaml
-echo "Edit the debug-pcap file to remove the extra '\\' "
-echo "Run the following command to apply the daemonset"
-echo "kubectl apply -f ${RESOURCEGROUP}/debug-pcap.yaml"
-#kubectl apply -f "${RESOURCEGROUP}/debug-${NAME}.yaml"
+wait 10
+echo "Waiting a bit for the PV/PVC to land" 
+
+kubectl apply -f "${RESOURCEGROUP}/debug-${NAME}.yaml"
 
 }
 
